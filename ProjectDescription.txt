@@ -1,0 +1,267 @@
+Below is a complete, implementation-ready description you can hand to a team. No code, just the blueprint.
+
+This is a project that has the intent of learning how all of this technology work, we will go step by step, and you will not go to ht enext step until we are done. 
+
+1) Product overview
+
+A local-first, chat-centric Data CoPilot that behaves like ChatGPT but is context-aware of:
+	•	Projects (global context),
+	•	Subfolders (scoped context that inherits from the Project),
+	•	User-selected files and database sources per turn.
+
+The CoPilot routes each message to internal agents (reasoning, profiling, harmonization, governance/doc gen) using LangChain + LangGraph, executes tools, and returns a single answer with provenance (what was used and why). It can profile data, harmonize values, create mastered records, and generate governance documents using templates and uploaded rules.
+
+Runs entirely on a local machine but is packaged to scale (multi-process workers, queues). Tech baseline: React (SPA) + FastAPI + Postgres (pgvector) + Redis + MinIO.
+
+⸻
+
+2) Goals & non-goals
+
+Goals
+	•	Chat-first UX with per-turn context control (checkboxes for Project/Subfolder/files/DBs).
+	•	Agentic routing for profiling, harmonization, governance document generation.
+	•	Write path for harmonization: create silver/gold tables while keeping bronze originals.
+	•	Strong provenance/audit, reversible runs, and exportable artifacts.
+	•	All components run locally; deployable via Docker Compose.
+
+Non-goals (prototype)
+	•	Enterprise SSO or multi-tenant RBAC (single-user local profile is fine for now).
+	•	Complex data virtualization (direct DB connections only).
+	•	Real-time streaming ETL.
+
+⸻
+
+3) Primary use cases
+	1.	Profile a dataset selected from a connected DB/table or uploaded file; return stats, issues, and rule suggestions.
+	2.	Harmonize a domain (standardize + map + match + survivorship); write silver/gold while preserving bronze; provide diffs and audit logs.
+	3.	Generate governance docs (DQ policy, stewardship, classification, lineage SOP, access/privacy, retention) from templates + uploaded rules + meeting notes; show validation and redlines.
+	4.	Context-aware Q&A pulling only the selected contexts (Project/Subfolder/files), with citations to source chunks and artifacts.
+
+⸻
+
+4) Personas
+	•	Data/Analytics consultant (primary): runs profiling/harmonization, drafts policies, assembles a project knowledge base.
+	•	Data steward: reviews issues, approves harmonization rules, signs off policies.
+	•	Project lead: inspects provenance, downloads reports, tracks document versions.
+
+⸻
+
+5) Architecture (local, scalable)
+	•	Frontend: React SPA (chat UI, context sidebar, pickers, previews, downloads).
+	•	API Gateway: FastAPI (stateless), hosting LangGraph orchestration, exposing endpoints.
+	•	Workers: Python task runners for heavy jobs (profiling, harmonization, embeddings, doc export) via Redis queue.
+	•	Database: Postgres 16 with pgvector for embeddings + OLTP schemas.
+	•	Object storage: MinIO (S3-compatible) for uploads, exports, evidence packs.
+	•	Cache/Queue: Redis (jobs, rate limits, short-lived caches).
+	•	Packaging: Docker Compose (services: web, api, workers, db, redis, minio, optional nginx).
+
+Why this scales: stateless API; heavy work in workers; queue-based fan-out; Postgres as single source of truth; pgvector for retrieval.
+
+⸻
+
+6) Key components
+
+6.1 Frontend (React SPA)
+	•	Chat window: conversation thread under a Subfolder.
+	•	Context rail: checkboxes to include/exclude Project, Subfolder(s), files, DBs/tables; template/ruleset toggles; variables panel; compliance tags.
+	•	Data picker: files (PDF/DOCX/MD/CSV/XLSX), DBs (saved connections), table/column filters.
+	•	Provenance capsule: shows contexts used, queries run, artifacts generated.
+	•	Downloads: profile reports, harmonization diffs, doc exports, evidence packs.
+
+6.2 API Gateway (FastAPI)
+	•	/chat/turn routes through LangGraph; returns assistant answer + pointers to artifacts and provenance.
+	•	/context/* CRUD for Projects/Subfolders/Threads; list and attach files/rules/templates.
+	•	/db/* manage connections; browse schemas; authorize read-only or write paths explicitly.
+	•	/artifacts/* list/fetch versions; mint signed URLs from MinIO.
+	•	Delegates heavy tasks to Workers, returns job summaries and progress where relevant.
+
+6.3 LangGraph orchestration
+
+Nodes
+	•	Router: inspects user ask + selected contexts → routes to agent(s).
+	•	Reasoner: default chat + RAG over checked contexts only.
+	•	Profiling Agent: column stats, patterns, key/dup candidates, rule checks.
+	•	Harmonization Agent: standardization → domain mapping → fuzzy match → survivorship → writes silver/gold + logs.
+	•	GovDoc Agent: template-based composition with uploaded rules; validation, redline, export.
+	•	Reconciler: merges multi-agent outputs into one message with a clear “What I used” section.
+
+State: stores IDs/pointers (not big blobs): {turn_id, selected_context_ids, retrieved_chunk_ids, job_ids, artifact_ids, provenance}.
+
+6.4 Workers
+	•	Embedding worker: chunk + embed uploads into pgvector; updates indices.
+	•	Profiling worker: pushdown aggregates; sampling; metrics; issues; CSV/MD summaries.
+	•	Harmonization worker: idempotent runs; writes silver (standardized), match clusters, gold (SCD2 survivorship); fills ops_* logs.
+	•	DocGen worker: section composition, schema validation, diffing, exports (DOCX/MD/PDF), evidence packs.
+
+⸻
+
+7) Data model (Postgres)
+
+7.1 Operational / app
+	•	project(id, name, description, meta_json)
+	•	subfolder(id, project_id, name, scope, meta_json)
+	•	thread(id, subfolder_id, title, created_by, created_at)
+	•	turn(id, thread_id, user_msg, selected_context_json, agent_plan_json, result_summary, created_at)
+
+7.2 Knowledge/RAG
+	•	doc_source(id, project_id, subfolder_id, type, meta_json)  // file, url, paste
+	•	chunk(id, source_id, text, meta_json)
+	•	embedding(id, chunk_id, vector pgvector, meta_json)  // HNSW or IVF index
+
+7.3 Artifacts & templates
+	•	template(id, kind, version, status, schema_json, meta_json)
+	•	document(id, template_id, project_id, subfolder_id, version, status, variables_json, provenance_json, created_at)
+	•	artifact(id, type, path, meta_json, created_at) // stored in MinIO
+
+7.4 DQ/MDM (local mastering pattern)
+	•	Raw (immutable): bronze_* (e.g., bronze_customer)
+	•	Standardized: silver_* (e.g., silver_customer)
+	•	Matching clusters: gold_*_match
+	•	Mastered (SCD2): gold_* (e.g., gold_customer)
+	•	Reference: ref_* (maps, code lists)
+	•	Operational logs:
+	•	ops_recipe(recipe_id, steps_json, created_by, created_at)
+	•	ops_run_log(run_id, agent, recipe_id, params_json, started_at, ended_at, status, error_msg)
+	•	ops_change_log(change_id, run_id, entity_table, entity_pk_json, field_name, before_value, after_value, changed_at)
+
+Principles: never mutate bronze; silver/gold are append/temporal; all changes logged and reversible.
+
+⸻
+
+8) Workflows (end-to-end)
+
+8.1 Context-aware QA
+	1.	User selects Project + Subfolder + files (checkboxes).
+	2.	Router → Reasoner → RAG over only checked contexts.
+	3.	Return answer + citations (chunk IDs) + provenance capsule.
+
+8.2 Profiling
+	1.	User selects DB connection and tables; runs “Profile”.
+	2.	Router → Profiling Agent → enqueues job.
+	3.	Worker performs: column stats (count, null %, distinct %), value patterns (regex), type inference, outliers (basic), candidate keys and dup clusters; runs saved DQ rules when selected.
+	4.	Artifacts: profile report (CSV/MD), issue list, recommended rules; artifacts stored in MinIO; summary returned in chat with links and provenance.
+
+8.3 Harmonization (write path)
+	1.	User picks dataset and recipe; chooses Write to silver/gold (explicit).
+	2.	Router → Harmonization Agent → standardize (dates, decimals, casing, trims), map (domains like country, state, GS1), write silver rows; log diffs in ops_change_log.
+	3.	Match: generate clusters with configurable thresholds; write to gold_*_match.
+	4.	Survivorship: apply strategy (source priority, recency, quality score) to generate/refresh gold (SCD2). Only close/insert when actual attribute changes.
+	5.	Chat returns: run summary, counts, top changes, cluster samples, links to diffs and views (current gold, lineage view).
+
+Reversibility: delete silver rows by std_run_id; re-open gold by inserting a new SCD row via re-run with earlier recipe; all backed by ops_* logs.
+
+8.4 Governance / document generation
+	1.	User selects template + uploaded rules + relevant files; sets variables in the side panel.
+	2.	Router → GovDoc Agent → section-wise compose with schema validation and compliance toggles.
+	3.	Show redlines vs baseline; unresolved variables flagged; export to DOCX/MD/PDF; provenance/evidence pack saved.
+
+⸻
+
+9) Context model & retrieval
+	•	Hierarchy: Subfolder inherits Project context; both are independently selectable per turn.
+	•	Scope control: Only checked contexts are included in retrieval; others are excluded by design.
+	•	RAG: per-turn query builds a retrieval view from selected Project/Subfolder/file chunks; includes metadata filters (domain, tags).
+	•	DB selection: user can limit to specific schemas/tables/columns per turn.
+
+⸻
+
+10) Agents & decision logic (LangGraph)
+	•	Router heuristics:
+	•	If ask contains action words (profile, nulls, distinct, duplicates, schema): → Profiling.
+	•	If ask contains harmonize/standardize/match/merge/survivorship/write: → Harmonization.
+	•	If ask contains policy/procedure/template/rules/compliance: → GovDoc.
+	•	Otherwise → Reasoner; can “fan-out” to Profiling or GovDoc if hints detected.
+	•	Parallelism: Router can run Profiling and GovDoc in parallel, then Reconciler merges outputs.
+
+⸻
+
+11) Security & guardrails (local)
+	•	DB creds: separate read-only and write roles; write role scoped to silver_*, gold_*, ops_*, ref_* only.
+	•	PII handling: mask by default in profiling outputs unless user disables masking for a turn.
+	•	Secrets: .env + OS keychain; single place for LLM keys if used; able to switch to local LLM.
+	•	Write confirmation: any write path requires an explicit user toggle per run.
+
+⸻
+
+12) Observability
+	•	OpenTelemetry spans around router decisions, retrieval calls, SQL, and worker jobs.
+	•	Structured logs keyed by run_id with timings and row counts.
+	•	Metrics: queue depth; task latency; rows scanned; %null/%dup; harmonization change counts; doc validation failures.
+
+⸻
+
+13) Deployment (local)
+	•	Docker Compose services: web, api, worker-embeddings, worker-profiling, worker-harmonization, worker-docgen, db, redis, minio (+ optional nginx).
+	•	Config: .env for ports, DSNs, model settings, feature flags (mask PII, allow writes).
+	•	Data persistence: Docker volumes for Postgres and MinIO buckets.
+
+⸻
+
+14) Non-functional requirements
+	•	Latency: sub-second for chat planning; profiling/harmonization jobs may take longer—return progress + artifacts when done (still in same reply).
+	•	Scalability: increase worker count; use pushdown stats; sample large tables by default.
+	•	Idempotency: runs keyed by (run_id, recipe_id, payload_hash) to prevent duplicates.
+	•	Reliability: transactions for each table family; retries with backoff for transient DB errors.
+
+⸻
+
+15) Risks & mitigations
+	•	Large files/tables: enforce sampling & pushdown; stream results; expose “row cap” controls.
+	•	Recipe errors: dry-run validation before write; unit tests for recipes; required confirmation gate.
+	•	Vector drift: re-embed on file change; store chunk hashes; background refresh worker.
+	•	Schema drift: schema inspector detects breaking changes; surface diffs before runs.
+
+⸻
+
+16) Acceptance criteria (MVP v1 – Profiling-first)
+	•	Chat can answer using only checked contexts; citations show chunk and artifact references.
+	•	Profiling returns column stats, pattern metrics, candidate keys, and a downloadable report.
+	•	All artifacts discoverable under the Subfolder; provenance capsule present on each turn.
+
+	Out of MVP v1 (planned next):
+	•	Harmonization writes to silver and gold with full ops_* logging and lineage; provides a diff sample; rollback is possible.
+	•	Governance doc generation produces a validated draft from template + uploaded rules; exports to DOCX/MD/PDF; shows redlines and unresolved variables.
+
+⸻
+
+17) Backlog (2 sprints)
+
+Sprint 1
+	•	Entities + migrations (projects/subfolders/threads/turns/templates/artifacts).
+	•	File ingestion → chunk → embed (pgvector).
+	•	Chat with RAG over selected contexts.
+	•	DB connect (read-only), schema browse, simple column stats.
+	•	Provenance capsule + artifact listing.
+
+Sprint 2
+	•	Bronze/silver/gold/ops schemas; idempotent run logging.
+	•	Profiling worker: null %, distinct %, patterns, dup candidates.
+	•	Harmonization worker: standardize + domain map → silver; basic match → clusters; survivorship → gold (SCD2).
+	•	GovDoc: template load, rules ingestion, validation, diff, export.
+	•	Context checkboxes fully wired; downloads working (MinIO signed URLs).
+
+⸻
+
+18) Future extensions
+	•	Local model server switch; multi-LLM router.
+	•	Lightweight RBAC (roles for write actions).
+	•	Rule marketplace (import common DQ/MDM packs).
+	•	Job dashboards; pause/resume; per-table SLAs and monitors.
+	•	Additional agents (lineage extractor, KPI designer, cost/volume forecaster).
+
+This is the full project description. When you’re ready, I can turn it into interface contracts (endpoint shapes, event payloads, and LangGraph node I/O), still without code.
+
+⸻
+
+19) Decisions
+
+	•	LLM setup: Use OpenAI ChatGPT API as the default model provider.
+	•	MVP priority: Start with Profiling first (harmonization and gov-doc to follow).
+	•	Targets (initial support): PostgreSQL; files CSV, PDF, DOCX, PPT/PPTX.
+	•	Harmonization domains (baseline):
+		•	Customer — attributes: name, email, phone, address, country; common harmonization: casing/trim, email format, phone to E.164, country code mapping.
+		•	Product — attributes: product name, SKU, UPC/GTIN, category, unit of measure; harmonization: standardize SKUs, align categories to GS1/internal ref list, unify UoM.
+		•	Vendor/Supplier (optional round two) — attributes: legal name, tax ID, DUNS, country; harmonization: standardize tax IDs, map DUNS, normalize suffixes (Inc., Ltd.).
+	•	Survivorship rules (order): 1) Source Priority (e.g., CRM > ERP > Webform); 2) Most Recent Update; 3) Highest Data Quality; 4) Fallback to null with issue logged; 5) Auditability in ops_change_log with before/after and applied rule.
+	•	Governance templates: Defer selection until working on the GovDoc agent.
+	•	Success metrics (MVP): Accurate, flexible, and easy to use (quantification TBD).
