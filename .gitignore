@@ -7,9 +7,23 @@
 node_modules/
 dist/
 build/
-.env
 .venv/
 venv/
+
+# Environment & secrets (never commit)
+.env
+.env.local
+.env.*.local
+**/.env
+infra/env/.env
+
+# Credentials and keys
+*.pem
+*.key
+credentials.json
+*.credentials.json
+service-account*.json
+secrets/
 __pycache__/
 *.pyc
 *.pyo
@@ -29,3 +43,5 @@ coverage.xml
 # Docker volumes (optional if bind-mounted)
 data/
 
+ProjectDescription.txt
+whereweare.txt
