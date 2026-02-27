@@ -47,6 +47,56 @@ services:
       timeout: 5s
       retries: 10
 
+  api:
+    build:
+      context: ../apps/api
+    container_name: dc_api
+    env_file:
+      - env/.env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../apps/api/app:/app/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: ../apps/web
+    container_name: dc_web
+    ports:
+      - "5173:5173"
+    volumes:
+      - ../apps/web/src:/app/src
+    depends_on:
+      - api
+
+  worker-profiling:
+    build:
+      context: ../workers/profiling
+    container_name: dc_worker_profiling
+    env_file:
+      - env/.env
+    volumes:
+      - ../workers/profiling/tasks.py:/app/tasks.py
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
 volumes:
   db_data:
   minio_data:

@@ -1,73 +1,34 @@
-# Data CoPilot — Proof of Concept (POC)
+# Data CoPilot — POC v1
 
-> **Status:** Early-stage POC. Core infrastructure runs locally; API, web, and workers are scaffolded but not yet implemented.
+> **Status:** MVP running locally. Full stack is live — upload a CSV, profile it, download the report.
 
-This repository is a proof of concept for a **local-first, chat-centric Data CoPilot**. The POC focuses on learning the technology stack step-by-step, with a scalable foundation that can evolve from CSV/Postgres today to Parquet, Databricks, Snowflake, or other infrastructure tomorrow.
-
----
-
-## What This POC Covers
-
-A context-aware Data CoPilot that routes user messages to internal agents (profiling, harmonization, governance/doc gen) using LangChain + LangGraph. Core workflows:
-
-- **Context-aware Q&A** — RAG over selected Project/Subfolder/files with citations
-- **Dataset profiling** — Column stats, patterns, rule checks, downloadable reports
-- **Harmonization** — Bronze → silver → gold (planned; out of v1 POC scope)
-- **Governance doc generation** — Template-based docs from uploaded rules (planned; out of v1 POC scope)
-
-Tech baseline: **React SPA + FastAPI + Postgres (pgvector) + Redis + MinIO**.
+A local-first Data CoPilot built step-by-step as a learning project. The foundation is intentionally swappable: CSV + Postgres today, Parquet + Databricks/Snowflake tomorrow.
 
 ---
 
-## Current POC State
-
-### ✅ Implemented
+## What's Running
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| **Infrastructure** | Ready | Postgres 16, Redis 7, MinIO via Docker Compose |
-| **Makefile** | Ready | `make up`, `make down`, `make ps`, `make logs`, `make restart` |
-| **Environment** | Partial | `infra/env/.env` for local config; `.env.example` to be added |
-| **Folder structure** | Scaffolded | `apps/`, `workers/`, `packages/`, `db/`, `scripts/`, `docs/` |
-
-### 🚧 Placeholders (not yet implemented)
-
-| Component | Location | Planned |
-|-----------|----------|---------|
-| **API** | `apps/api/` | FastAPI with `/healthz`, `/profiling/run`, `/jobs/{id}`, `/artifacts/{id}/signed-url` |
-| **Web** | `apps/web/` | React SPA (Vite) with chat UI, Run Profile button, artifact links |
-| **Profiling worker** | `workers/profiling/` | RQ consumer → Postgres stats → MinIO artifact → DB update |
-| **Shared schemas** | `packages/shared/` | Pydantic models, job payloads, event contracts |
-| **DB migrations** | `db/migrations/` | Alembic; tables: project, subfolder, thread, turn, artifact, profile_run, profile_result |
-| **Scripts** | `scripts/` | MinIO bucket bootstrap, seed data, dev utilities |
-| **Docs** | `docs/` | ADRs, diagrams, interface contracts |
-
-### Infra Services (Docker Compose)
-
-- **db** — Postgres 16 (pgvector planned)
-- **redis** — Queue and cache
-- **minio** — S3-compatible object storage (buckets: `uploads`, `artifacts`, `evidence`)
+| **Infra** | ✅ | Postgres 16, Redis 7, MinIO — Docker Compose |
+| **API** | ✅ | FastAPI — upload, profiling, artifact download |
+| **DB migrations** | ✅ | Alembic — 7 tables |
+| **Profiling worker** | ✅ | RQ consumer — column stats → MinIO → DB |
+| **Web UI** | ✅ | React + Vite — CSV upload, profile, download |
+| **Seed data** | ✅ | `make seed` — sample projects, threads, turns |
 
 ---
 
-## Project Structure
+## Services & Ports
 
-```
-apps/
-  api/                # FastAPI service (skeleton)
-  web/                # React SPA (skeleton)
-workers/
-  profiling/          # Profiling worker (skeleton)
-db/
-  migrations/         # Alembic migrations (placeholder)
-infra/
-  docker-compose.yml  # Postgres, Redis, MinIO
-  env/                # .env (local); .env.example (to add)
-packages/
-  shared/             # Shared types/schemas (placeholder)
-scripts/              # Dev scripts (placeholder)
-docs/                 # Documentation (placeholder)
-```
+| Service | URL | Purpose |
+|---------|-----|---------|
+| Web UI | http://localhost:5173 | React + Vite frontend |
+| API | http://localhost:8000 | FastAPI backend |
+| API docs | http://localhost:8000/docs | Swagger UI |
+| MinIO console | http://localhost:9001 | Object storage UI |
+| Postgres | localhost:5432 | Database |
+| Redis | localhost:6379 | Job queue |
 
 ---
 
@@ -75,59 +36,140 @@ docs/                 # Documentation (placeholder)
 
 ### Prerequisites
 
-- **Docker Desktop** (includes Compose v2). Verify: `docker --version`, `docker compose version`
-- **make** (optional; use direct Compose commands if not available)
+- **Docker Desktop** — `docker --version` and `docker compose version`
+- **make**
 
 ### Setup
 
-1. **Environment file** — Copy the example and add your secrets:
+```bash
+# 1. Copy env file and fill in your values
+cp infra/env/.env.example infra/env/.env
 
-   ```bash
-   cp infra/env/.env.example infra/env/.env
-   ```
+# 2. Start everything
+make up
 
-   Edit `infra/env/.env` and fill in real values (the `.env` file is gitignored and will not be committed).
+# 3. Run migrations
+make migrate
 
-2. **Start infrastructure:**
+# 4. (Optional) Seed sample data
+make seed
+```
 
-   ```bash
-   make up
-   ```
-
-3. **Verify services:**
-
-   ```bash
-   make ps
-   docker exec -it dc_db psql -U datacopilot -d datacopilot -c "select 1;"
-   docker exec -it dc_redis redis-cli ping   # expect PONG
-   ```
-
-4. **MinIO console** — Open http://localhost:9001, create buckets: `uploads`, `artifacts`, `evidence`.
-
-### Ports
-
-| Service | Port | Purpose |
-|---------|------|---------|
-| Postgres | 5432 | Database |
-| Redis | 6379 | Queue / cache |
-| MinIO API | 9000 | S3 API |
-| MinIO Console | 9001 | Web UI |
+Open **http://localhost:5173**.
 
 ---
 
-## Planned Next Steps (POC v1)
+## API Endpoints
 
-1. **API-first** — FastAPI app with `/healthz`, Dockerfile, add `api` service to Compose.
-2. **DB migrations** — Initial Alembic migrations for `project`, `subfolder`, `thread`, `turn`, `artifact`, `profile_run`, `profile_result`.
-3. **Profiling worker** — RQ worker that consumes jobs, computes basic stats, writes artifact to MinIO.
-4. **Web MVP** — Vite + React page with Run Profile button, status polling, artifact download link.
+```
+GET  /healthz                          Health check
+POST /upload                           Upload a CSV → creates a Postgres table
+POST /profiling/run                    Enqueue a profiling job
+GET  /profiling/runs/{id}              Poll job status + result
+GET  /profiling/runs/{id}/download     Download the JSON report artifact
+```
 
 ---
 
-## Reference
+## How It Works
 
-- **Blueprint** — See `ProjectDescription.txt` for the full product vision, data model, and workflows (currently gitignored; un-ignore to reference).
-- **Component READMEs** — Each folder (`apps/api`, `apps/web`, `workers/profiling`, etc.) has a README with implementation notes.
+```
+Browser → POST /upload
+            → parses CSV, creates table in Postgres, saves file to MinIO
+
+Browser → POST /profiling/run
+            → inserts profile_run row (status: pending)
+            → enqueues job in Redis
+
+RQ Worker → dequeues job
+            → queries Postgres for column stats (row count, null %, distinct count)
+            → writes JSON report to MinIO (artifacts bucket)
+            → inserts artifact + profile_result rows
+            → updates profile_run.status = done
+
+Browser → GET /profiling/runs/{id}     (polling every 1s)
+            → returns status + result when done
+
+Browser → GET /profiling/runs/{id}/download
+            → streams JSON report from MinIO through the API
+```
+
+---
+
+## Project Structure
+
+```
+apps/
+  api/                    FastAPI service
+    app/
+      main.py             Endpoints: /upload, /profiling/*, /healthz
+      models.py           SQLAlchemy 2.0 table definitions
+      db.py               Session factory
+      queue.py            RQ queue client
+      storage.py          MinIO client
+    alembic/              Migrations
+    Dockerfile
+    requirements.txt
+  web/                    React + Vite SPA
+    src/
+      App.jsx             CSV upload + profiling UI
+    vite.config.js        Dev server + API proxy
+    Dockerfile
+
+workers/
+  profiling/
+    tasks.py              run_profile() — stats, MinIO upload, DB update
+    worker.py             RQ worker entry point
+    Dockerfile
+
+db/
+  migrations/             Alembic config lives in apps/api/alembic/
+
+infra/
+  docker-compose.yml      All 6 services
+  env/
+    .env.example          Template — copy to .env
+
+scripts/
+  seed.py                 Insert sample projects, subfolders, threads, turns
+```
+
+---
+
+## Database Schema
+
+| Table | Purpose |
+|-------|---------|
+| `project` | Top-level workspace |
+| `subfolder` | Folder within a project |
+| `thread` | Chat conversation |
+| `turn` | Single message in a thread (role: user/assistant) |
+| `artifact` | File stored in MinIO (key, bucket, content_type) |
+| `profile_run` | A profiling job (pending → running → done/failed) |
+| `profile_result` | Output + JSON summary of a profile run |
+
+---
+
+## Make Targets
+
+```bash
+make up        # Start all Docker services
+make down      # Stop all services
+make ps        # Show service status
+make logs      # Tail all logs
+make restart   # down + up
+make migrate   # Run Alembic migrations (alembic upgrade head)
+make seed      # Insert sample data
+```
+
+---
+
+## Planned Next Steps
+
+- **Context picker** — project/subfolder selector in the UI
+- **Chat / Q&A** — RAG over uploaded files with citations (LangChain + pgvector)
+- **Harmonization** — Bronze → silver → gold pipeline
+- **Governance doc gen** — Template-based docs from uploaded rules
 
 ---
 
